@@ -6,6 +6,7 @@ import {
   type ChatInputCommandInteraction,
   type Message
 } from "discord.js";
+import type { AdapterProgressEvent } from "../adapters/types.js";
 import { AgentService } from "../agent/agent-service.js";
 import { DomainError } from "../domain/errors.js";
 import { withDiscordRateLimitRetry } from "./rate-limit.js";
@@ -17,17 +18,23 @@ export interface DiscordBotOptions {
 }
 
 export class DiscordBot {
+  private static readonly TYPING_HEARTBEAT_MS = 8000;
+  private static readonly DISCORD_MESSAGE_LIMIT = 2000;
   private readonly token: string;
   private readonly ownerId: string;
   private readonly service: AgentService;
   private readonly client: Client;
-  private readonly statusMessages: Map<string, { threadId: string; messageId: string }>;
+  private readonly typingHeartbeats: Map<string, ReturnType<typeof setInterval>>;
+  private readonly streamedJobs: Set<string>;
+  private readonly lastActivityByJob: Map<string, string>;
 
   public constructor(options: DiscordBotOptions) {
     this.token = options.token;
     this.ownerId = options.ownerId;
     this.service = options.service;
-    this.statusMessages = new Map();
+    this.typingHeartbeats = new Map();
+    this.streamedJobs = new Set();
+    this.lastActivityByJob = new Map();
 
     this.client = new Client({
       intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
@@ -56,12 +63,35 @@ export class DiscordBot {
   }
 
   public async onJobStarted(event: { threadId: string; jobId: string }): Promise<void> {
-    const record = this.statusMessages.get(event.jobId);
-    if (!record) {
+    await this.sendTyping(event.threadId);
+    this.startTypingHeartbeat(event.jobId, event.threadId);
+  }
+
+  public async onJobProgress(event: {
+    threadId: string;
+    jobId: string;
+    progress: AdapterProgressEvent;
+  }): Promise<void> {
+    if (event.progress.type === "assistant_text") {
+      const text = event.progress.text.trim();
+      if (text.length === 0) {
+        return;
+      }
+
+      this.streamedJobs.add(event.jobId);
+      await this.sendThreadMessage(event.threadId, text);
       return;
     }
 
-    await this.editStatusMessage(record.threadId, record.messageId, `Running \`${event.jobId}\` ...`);
+    if (event.progress.activity === "thinking") {
+      const activityLabel = `${event.progress.activity}:${event.progress.label}`;
+      if (this.lastActivityByJob.get(event.jobId) !== activityLabel) {
+        this.lastActivityByJob.set(event.jobId, activityLabel);
+        await this.sendThreadMessage(event.threadId, this.formatActivity(event.progress));
+      }
+    }
+
+    await this.sendTyping(event.threadId);
   }
 
   public async onJobFinished(event: {
@@ -72,27 +102,20 @@ export class DiscordBot {
     errorCode?: string;
     errorMessage?: string;
   }): Promise<void> {
-    const record = this.statusMessages.get(event.jobId);
+    this.stopTypingHeartbeat(event.jobId);
 
     if (event.state === "success") {
-      const message = event.resultExcerpt ? `\n\n${event.resultExcerpt}` : "";
-      const body = `Completed \`${event.jobId}\` successfully.${message}`;
-
-      if (record) {
-        await this.editStatusMessage(record.threadId, record.messageId, body);
-      } else {
-        await this.sendThreadMessage(event.threadId, body);
+      const hasStreamed = this.streamedJobs.has(event.jobId);
+      if (!hasStreamed && event.resultExcerpt) {
+        await this.sendThreadMessage(event.threadId, event.resultExcerpt);
       }
     } else {
       const body = `Failed \`${event.jobId}\`: ${event.errorCode ?? "unknown"} ${event.errorMessage ?? ""}`;
-      if (record) {
-        await this.editStatusMessage(record.threadId, record.messageId, body);
-      } else {
-        await this.sendThreadMessage(event.threadId, body);
-      }
+      await this.sendThreadMessage(event.threadId, body);
     }
 
-    this.statusMessages.delete(event.jobId);
+    this.streamedJobs.delete(event.jobId);
+    this.lastActivityByJob.delete(event.jobId);
   }
 
   private async handleInteraction(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -321,15 +344,6 @@ export class DiscordBot {
       if (enqueued.deduped) {
         return;
       }
-
-      const statusMessage = await withDiscordRateLimitRetry(async () => {
-        return await message.reply(`Queued \`${enqueued.jobId}\``);
-      });
-
-      this.statusMessages.set(enqueued.jobId, {
-        threadId: message.channel.id,
-        messageId: statusMessage.id
-      });
     } catch (error) {
       if (error instanceof DomainError) {
         await withDiscordRateLimitRetry(async () => {
@@ -372,26 +386,83 @@ export class DiscordBot {
       return;
     }
 
-    await withDiscordRateLimitRetry(async () => {
-      await channel.send(content);
-      return undefined;
-    });
+    for (const chunk of this.splitMessage(content)) {
+      await withDiscordRateLimitRetry(async () => {
+        await channel.send(chunk);
+        return undefined;
+      });
+    }
   }
 
-  private async editStatusMessage(
-    threadId: string,
-    messageId: string,
-    content: string
-  ): Promise<void> {
+  private async sendTyping(threadId: string): Promise<void> {
     const channel = await this.client.channels.fetch(threadId);
     if (!channel || !channel.isThread()) {
       return;
     }
 
     await withDiscordRateLimitRetry(async () => {
-      const target = await channel.messages.fetch(messageId);
-      await target.edit(content);
+      await channel.sendTyping();
       return undefined;
     });
+  }
+
+  private startTypingHeartbeat(jobId: string, threadId: string): void {
+    this.stopTypingHeartbeat(jobId);
+    const timer = setInterval(() => {
+      void this.sendTyping(threadId);
+    }, DiscordBot.TYPING_HEARTBEAT_MS);
+    this.typingHeartbeats.set(jobId, timer);
+  }
+
+  private stopTypingHeartbeat(jobId: string): void {
+    const timer = this.typingHeartbeats.get(jobId);
+    if (!timer) {
+      return;
+    }
+
+    clearInterval(timer);
+    this.typingHeartbeats.delete(jobId);
+  }
+
+  private splitMessage(content: string): string[] {
+    const trimmed = content.trim();
+    if (trimmed.length === 0) {
+      return [];
+    }
+
+    if (trimmed.length <= DiscordBot.DISCORD_MESSAGE_LIMIT) {
+      return [trimmed];
+    }
+
+    const chunks: string[] = [];
+    let rest = trimmed;
+    while (rest.length > 0) {
+      if (rest.length <= DiscordBot.DISCORD_MESSAGE_LIMIT) {
+        chunks.push(rest);
+        break;
+      }
+
+      let cut = rest.lastIndexOf("\n", DiscordBot.DISCORD_MESSAGE_LIMIT);
+      if (cut <= 0) {
+        cut = DiscordBot.DISCORD_MESSAGE_LIMIT;
+      }
+
+      const part = rest.slice(0, cut).trim();
+      if (part.length > 0) {
+        chunks.push(part);
+      }
+
+      rest = rest.slice(cut).trimStart();
+    }
+
+    return chunks;
+  }
+
+  private formatActivity(event: Extract<AdapterProgressEvent, { type: "activity" }>): string {
+    if (event.activity === "thinking") {
+      return "_thinking..._";
+    }
+
+    return `_using ${event.label}..._`;
   }
 }

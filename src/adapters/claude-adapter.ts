@@ -1,6 +1,118 @@
-import { errorToMessage, extractAssistantText, isLikelyJsonObjectLine, tryParseJsonObject } from "./parsing.js";
+import { errorToMessage, isLikelyJsonObjectLine, tryParseJsonObject } from "./parsing.js";
 import type { CommandRunner } from "./command-runner.js";
 import type { AdapterRunInput, AdapterRunResult, ToolAdapter } from "./types.js";
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function extractClaudeAssistantText(event: Record<string, unknown>): string {
+  if (event.type === "assistant") {
+    const message = event.message;
+    if (!isObject(message) || message.role !== "assistant") {
+      return "";
+    }
+
+    const content = message.content;
+    if (!Array.isArray(content)) {
+      return "";
+    }
+
+    const chunks: string[] = [];
+    for (const block of content) {
+      if (!isObject(block)) {
+        continue;
+      }
+
+      if (block.type === "text" && typeof block.text === "string" && block.text.length > 0) {
+        chunks.push(block.text);
+      }
+    }
+
+    return chunks.join("\n").trim();
+  }
+
+  if (
+    event.type === "result" &&
+    typeof event.result === "string" &&
+    event.result.length > 0
+  ) {
+    return event.result;
+  }
+
+  return "";
+}
+
+function emitClaudeProgress(
+  event: Record<string, unknown>,
+  onProgress?: AdapterRunInput["onProgress"]
+): void {
+  if (!onProgress) {
+    return;
+  }
+
+  if (event.type === "assistant") {
+    const message = event.message;
+    if (!isObject(message) || message.role !== "assistant") {
+      return;
+    }
+
+    const content = message.content;
+    if (!Array.isArray(content)) {
+      return;
+    }
+
+    for (const block of content) {
+      if (!isObject(block) || typeof block.type !== "string") {
+        continue;
+      }
+
+      if (block.type === "tool_use") {
+        const label = typeof block.name === "string" && block.name.length > 0 ? block.name : "tool";
+        onProgress({
+          type: "activity",
+          activity: "tool",
+          label
+        });
+        continue;
+      }
+
+      if (block.type === "thinking") {
+        onProgress({
+          type: "activity",
+          activity: "thinking",
+          label: "thinking"
+        });
+        continue;
+      }
+
+      if (block.type === "text" && typeof block.text === "string") {
+        const text = block.text.trim();
+        if (text.length > 0) {
+          onProgress({
+            type: "assistant_text",
+            text
+          });
+        }
+      }
+    }
+
+    return;
+  }
+
+}
+
+function appendUnique(parts: string[], text: string): void {
+  if (text.length === 0) {
+    return;
+  }
+
+  if (parts.at(-1) === text) {
+    return;
+  }
+
+  parts.push(text);
+}
 
 export class ClaudeAdapter implements ToolAdapter {
   private readonly runner: CommandRunner;
@@ -18,7 +130,22 @@ export class ClaudeAdapter implements ToolAdapter {
         command: this.command,
         args: this.buildArgs(input),
         cwd: input.cwd,
-        timeoutSec: input.timeoutSec
+        timeoutSec: input.timeoutSec,
+        onStdoutLine: (line) => {
+          if (!isLikelyJsonObjectLine(line)) {
+            return;
+          }
+
+          try {
+            const parsed = tryParseJsonObject(line);
+            if (!parsed) {
+              return;
+            }
+            emitClaudeProgress(parsed, input.onProgress);
+          } catch {
+            // Parse failures are handled in the post-run pass.
+          }
+        }
       });
     } catch (error) {
       return {
@@ -76,10 +203,7 @@ export class ClaudeAdapter implements ToolAdapter {
         sessionId = parsed.session_id;
       }
 
-      const text = extractAssistantText(parsed);
-      if (text.length > 0) {
-        assistantParts.push(text);
-      }
+      appendUnique(assistantParts, extractClaudeAssistantText(parsed));
     }
 
     if (runResult.exitCode !== 0) {
@@ -119,7 +243,13 @@ export class ClaudeAdapter implements ToolAdapter {
   }
 
   private buildArgs(input: AdapterRunInput): string[] {
-    const args = ["-p", "--verbose", "--output-format", "stream-json"];
+    const args = [
+      "-p",
+      "--dangerously-skip-permissions",
+      "--verbose",
+      "--output-format",
+      "stream-json"
+    ];
     if (input.resumeKey) {
       args.push("-r", input.resumeKey);
     }

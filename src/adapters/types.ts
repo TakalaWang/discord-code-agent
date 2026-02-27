@@ -6,7 +6,23 @@ export interface AdapterRunInput {
   cwd: string;
   timeoutSec: number;
   resumeKey?: string;
+  onProgress?: (event: AdapterProgressEvent) => void;
 }
+
+export interface AdapterProgressActivityEvent {
+  type: "activity";
+  activity: "thinking" | "tool";
+  label: string;
+}
+
+export interface AdapterProgressAssistantTextEvent {
+  type: "assistant_text";
+  text: string;
+}
+
+export type AdapterProgressEvent =
+  | AdapterProgressActivityEvent
+  | AdapterProgressAssistantTextEvent;
 
 export interface AdapterRunSuccess {
   ok: true;

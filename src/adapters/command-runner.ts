@@ -5,6 +5,8 @@ export interface CommandRunRequest {
   args: string[];
   cwd: string;
   timeoutSec: number;
+  onStdoutLine?: (line: string) => void;
+  onStderrLine?: (line: string) => void;
 }
 
 export interface CommandRunResult {
@@ -51,6 +53,7 @@ export class SpawnCommandRunner implements CommandRunner {
         stdoutBuffer = segments.pop() ?? "";
         for (const line of segments) {
           stdoutLines.push(line);
+          request.onStdoutLine?.(line);
         }
       });
 
@@ -60,6 +63,7 @@ export class SpawnCommandRunner implements CommandRunner {
         stderrBuffer = segments.pop() ?? "";
         for (const line of segments) {
           stderrLines.push(line);
+          request.onStderrLine?.(line);
         }
       });
 
@@ -73,10 +77,12 @@ export class SpawnCommandRunner implements CommandRunner {
 
         if (stdoutBuffer.length > 0) {
           stdoutLines.push(stdoutBuffer);
+          request.onStdoutLine?.(stdoutBuffer);
         }
 
         if (stderrBuffer.length > 0) {
           stderrLines.push(stderrBuffer);
+          request.onStderrLine?.(stderrBuffer);
         }
 
         resolve({

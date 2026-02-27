@@ -3,7 +3,7 @@ import { CLI_TIMEOUT_SEC, GLOBAL_MAX_RUNNING, MAX_RESULT_EXCERPT_CHARS } from ".
 import { AppLogger } from "../logging/app-logger.js";
 import { writeJobLog } from "../logging/job-log-writer.js";
 import type { ConfigStore } from "../config/config-store.js";
-import type { AdapterRegistry } from "../adapters/types.js";
+import type { AdapterProgressEvent, AdapterRegistry } from "../adapters/types.js";
 import type { RuntimeStore } from "../state/runtime-store.js";
 import type { SessionEntity } from "../state/replay.js";
 
@@ -23,6 +23,11 @@ export interface JobCoordinatorOptions {
     errorCode?: string;
     errorMessage?: string;
   }) => Promise<void> | void;
+  onJobProgress?: (event: {
+    threadId: string;
+    jobId: string;
+    progress: AdapterProgressEvent;
+  }) => Promise<void> | void;
 }
 
 export class JobCoordinator {
@@ -35,6 +40,7 @@ export class JobCoordinator {
   private readonly logger: AppLogger;
   private onJobStarted?: JobCoordinatorOptions["onJobStarted"];
   private onJobFinished?: JobCoordinatorOptions["onJobFinished"];
+  private onJobProgress?: JobCoordinatorOptions["onJobProgress"];
 
   private readonly runningThreads: Set<string>;
   private readonly runningPromises: Set<Promise<void>>;
@@ -50,6 +56,7 @@ export class JobCoordinator {
     this.logger = new AppLogger(join(this.logDir, "app.ndjson"));
     this.onJobStarted = options.onJobStarted;
     this.onJobFinished = options.onJobFinished;
+    this.onJobProgress = options.onJobProgress;
 
     this.runningThreads = new Set();
     this.runningPromises = new Set();
@@ -63,9 +70,11 @@ export class JobCoordinator {
   public setHooks(hooks: {
     onJobStarted?: JobCoordinatorOptions["onJobStarted"];
     onJobFinished?: JobCoordinatorOptions["onJobFinished"];
+    onJobProgress?: JobCoordinatorOptions["onJobProgress"];
   }): void {
     this.onJobStarted = hooks.onJobStarted ?? this.onJobStarted;
     this.onJobFinished = hooks.onJobFinished ?? this.onJobFinished;
+    this.onJobProgress = hooks.onJobProgress ?? this.onJobProgress;
   }
 
   public async waitForIdle(): Promise<void> {
@@ -196,10 +205,30 @@ export class JobCoordinator {
       cwd: string;
       timeoutSec: number;
       resumeKey?: string;
+      onProgress: (progress: AdapterProgressEvent) => void;
     } = {
       prompt: job.prompt,
       cwd: project.path,
-      timeoutSec: this.timeoutSec
+      timeoutSec: this.timeoutSec,
+      onProgress: (progress) => {
+        const hook = this.onJobProgress;
+        if (!hook) {
+          return;
+        }
+
+        void Promise.resolve(hook({ threadId, jobId, progress })).catch(async (error) => {
+          await this.logger.log({
+            ts: new Date().toISOString(),
+            level: "warn",
+            message: "job progress hook failed",
+            meta: {
+              thread_id: threadId,
+              job_id: jobId,
+              reason: error instanceof Error ? error.message : String(error)
+            }
+          });
+        });
+      }
     };
     if (resumeKey !== undefined) {
       adapterInput.resumeKey = resumeKey;

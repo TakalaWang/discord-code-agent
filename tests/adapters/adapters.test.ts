@@ -23,6 +23,14 @@ class FakeRunner implements CommandRunner {
     if (!next) {
       throw new Error("no fake reply available");
     }
+
+    for (const line of next.stdoutLines) {
+      request.onStdoutLine?.(line);
+    }
+    for (const line of next.stderrLines) {
+      request.onStderrLine?.(line);
+    }
+
     return next;
   }
 }
@@ -120,7 +128,7 @@ describe("CodexAdapter", () => {
         timedOut: false,
         stdoutLines: [
           '{"type":"thread.started","thread_id":"codex-thread-1"}',
-          '{"type":"response.output_text.delta","delta":"hello"}'
+          '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"hello"}}'
         ],
         stderrLines: []
       },
@@ -129,7 +137,7 @@ describe("CodexAdapter", () => {
         timedOut: false,
         stdoutLines: [
           '{"type":"thread.started","thread_id":"codex-thread-1"}',
-          '{"type":"response.output_text.delta","delta":"again"}'
+          '{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"again"}}'
         ],
         stderrLines: []
       }
@@ -137,7 +145,6 @@ describe("CodexAdapter", () => {
 
     const adapter = new CodexAdapter(runner);
     const first = await adapter.run({ prompt: "first", cwd: "/tmp", timeoutSec: 30 });
-    expect(first.ok).toBe(true);
 
     const second = await adapter.run({
       prompt: "second",
@@ -147,12 +154,55 @@ describe("CodexAdapter", () => {
     });
 
     expect(second.ok).toBe(true);
-    expect(runner.requests[1]?.args.slice(0, 4)).toEqual([
+    expect(runner.requests[1]?.args.slice(0, 6)).toEqual([
       "exec",
+      "--dangerously-bypass-approvals-and-sandbox",
       "resume",
       "codex-thread-1",
-      "--json"
+      "--json",
+      "second"
     ]);
+
+    expect(first.ok).toBe(true);
+    if (first.ok) {
+      expect(first.assistantText).toContain("hello");
+    }
+  });
+
+  it("emits progress for codex tool activity and assistant text", async () => {
+    const runner = new FakeRunner([
+      {
+        exitCode: 0,
+        timedOut: false,
+        stdoutLines: [
+          '{"type":"thread.started","thread_id":"codex-thread-2"}',
+          '{"type":"item.started","item":{"id":"item_3","type":"command_execution","command":"/bin/zsh -lc \\"ls -la\\""}}',
+          '{"type":"item.completed","item":{"id":"item_4","type":"reasoning","text":"thinking"}}',
+          '{"type":"item.completed","item":{"id":"item_5","type":"agent_message","text":"final answer"}}'
+        ],
+        stderrLines: []
+      }
+    ]);
+
+    const progress: string[] = [];
+    const adapter = new CodexAdapter(runner);
+    const result = await adapter.run({
+      prompt: "run",
+      cwd: "/tmp",
+      timeoutSec: 30,
+      onProgress: (event) => {
+        if (event.type === "assistant_text") {
+          progress.push(`text:${event.text}`);
+          return;
+        }
+        progress.push(`${event.activity}:${event.label}`);
+      }
+    });
+
+    expect(result.ok).toBe(true);
+    expect(progress).toContain("tool:bash");
+    expect(progress).toContain("thinking:reasoning");
+    expect(progress).toContain("text:final answer");
   });
 });
 
@@ -163,8 +213,7 @@ describe("ClaudeAdapter", () => {
         exitCode: 0,
         timedOut: false,
         stdoutLines: [
-          '{"type":"message","role":"assistant","delta":"ok"}',
-          '{"session_id":"claude-session-1"}'
+          '{"type":"assistant","session_id":"claude-session-1","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}'
         ],
         stderrLines: []
       }
@@ -181,5 +230,33 @@ describe("ClaudeAdapter", () => {
     expect(result.ok).toBe(true);
     expect(runner.requests[0]?.args).toContain("-r");
     expect(runner.requests[0]?.args).toContain("claude-session-1");
+  });
+
+  it("ignores user/tool_result payload and keeps assistant text", async () => {
+    const runner = new FakeRunner([
+      {
+        exitCode: 0,
+        timedOut: false,
+        stdoutLines: [
+          '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"1→{\\"name\\":\\"discord-code-agent\\"}"}]}}',
+          '{"type":"assistant","session_id":"claude-session-2","message":{"role":"assistant","content":[{"type":"text","text":"這是專案摘要"}]}}',
+          '{"type":"result","subtype":"success","session_id":"claude-session-2","result":"最終回覆"}'
+        ],
+        stderrLines: []
+      }
+    ]);
+
+    const adapter = new ClaudeAdapter(runner);
+    const result = await adapter.run({
+      prompt: "what is this project",
+      cwd: "/tmp",
+      timeoutSec: 30
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.assistantText).toContain("這是專案摘要");
+      expect(result.assistantText).not.toContain("1→{");
+    }
   });
 });

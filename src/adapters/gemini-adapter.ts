@@ -75,6 +75,43 @@ function parseGemini(stdoutLines: string[]): GeminiParseResult {
   };
 }
 
+function emitGeminiProgress(
+  line: string,
+  onProgress?: AdapterRunInput["onProgress"]
+): void {
+  if (!onProgress || !isLikelyJsonObjectLine(line)) {
+    return;
+  }
+
+  const parsed = tryParseJsonObject(line);
+  if (!parsed) {
+    return;
+  }
+
+  if (parsed.type !== "message" || parsed.role !== "assistant") {
+    return;
+  }
+
+  if (typeof parsed.delta === "string") {
+    const delta = parsed.delta.trim();
+    if (delta.length > 0) {
+      onProgress({
+        type: "assistant_text",
+        text: delta
+      });
+    }
+    return;
+  }
+
+  const text = extractAssistantText(parsed);
+  if (text.length > 0) {
+    onProgress({
+      type: "assistant_text",
+      text
+    });
+  }
+}
+
 export class GeminiAdapter implements ToolAdapter {
   private readonly runner: CommandRunner;
   private readonly command: string;
@@ -95,7 +132,14 @@ export class GeminiAdapter implements ToolAdapter {
           command: this.command,
           args: this.buildArgs(input),
           cwd: input.cwd,
-          timeoutSec: input.timeoutSec
+          timeoutSec: input.timeoutSec,
+          onStdoutLine: (line) => {
+            try {
+              emitGeminiProgress(line, input.onProgress);
+            } catch {
+              // Parse failures are handled in the post-run pass.
+            }
+          }
         });
       } catch (error) {
         return {
@@ -217,7 +261,7 @@ export class GeminiAdapter implements ToolAdapter {
   }
 
   private buildArgs(input: AdapterRunInput): string[] {
-    const args = ["-p", input.prompt, "--output-format", "stream-json"];
+    const args = ["--yolo", "-p", input.prompt, "--output-format", "stream-json"];
     if (input.resumeKey) {
       args.push("--resume", input.resumeKey);
     }

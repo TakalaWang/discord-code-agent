@@ -49,7 +49,8 @@ async function main(): Promise<void> {
 
   coordinator.setHooks({
     onJobStarted: (event) => bot.onJobStarted(event),
-    onJobFinished: (event) => bot.onJobFinished(event)
+    onJobFinished: (event) => bot.onJobFinished(event),
+    onJobProgress: (event) => bot.onJobProgress(event)
   });
 
   await registerGlobalCommands({
