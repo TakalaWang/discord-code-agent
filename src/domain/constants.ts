@@ -1,0 +1,7 @@
+export const CLI_TIMEOUT_SEC = 900;
+export const MAX_QUEUE_PER_SESSION = 20;
+export const GLOBAL_MAX_RUNNING = 2;
+export const STATUS_EDIT_MIN_INTERVAL_MS = 1200;
+export const SNAPSHOT_EVERY_EVENTS = 50;
+export const SNAPSHOT_EVERY_SECONDS = 5;
+export const MAX_RESULT_EXCERPT_CHARS = 400;
