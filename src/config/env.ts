@@ -1,4 +1,7 @@
+import { config as loadDotEnv } from "dotenv";
 import { z } from "zod";
+
+loadDotEnv();
 
 const envSchema = z.object({
   DISCORD_TOKEN: z.string().min(1),
