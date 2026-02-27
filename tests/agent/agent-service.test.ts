@@ -87,9 +87,7 @@ async function createHarness() {
   const config = await ConfigStore.open(configPath, "owner-1");
   await config.createProject({
     name: "my-app",
-    path: root,
-    toolsCsv: "gemini,codex,claude",
-    defaultTool: "gemini"
+    path: root
   });
 
   const runtime = await RuntimeStore.open({ stateDir });
@@ -115,13 +113,23 @@ describe("AgentService", () => {
     const { service } = await createHarness();
 
     await expect(
-      service.startSession({ userId: "not-owner", projectName: "my-app", threadId: "thread-a" })
+      service.startSession({
+        userId: "not-owner",
+        projectName: "my-app",
+        threadId: "thread-a",
+        tool: "gemini"
+      })
     ).rejects.toMatchObject({ code: "E_OWNER_ONLY" });
   });
 
   it("processes thread jobs in FIFO order", async () => {
     const { service, gemini } = await createHarness();
-    await service.startSession({ userId: "owner-1", projectName: "my-app", threadId: "thread-a" });
+    await service.startSession({
+      userId: "owner-1",
+      projectName: "my-app",
+      threadId: "thread-a",
+      tool: "gemini"
+    });
 
     await service.enqueueThreadMessage({
       userId: "owner-1",
@@ -147,36 +155,36 @@ describe("AgentService", () => {
     expect(gemini.calls.map((call) => call.prompt)).toEqual(["first", "second", "third"]);
   });
 
-  it("tool switch only affects newly enqueued jobs", async () => {
+  it("uses tool selected on session start", async () => {
     const { service, gemini, codex } = await createHarness();
-    await service.startSession({ userId: "owner-1", projectName: "my-app", threadId: "thread-a" });
+    await service.startSession({
+      userId: "owner-1",
+      projectName: "my-app",
+      threadId: "thread-a",
+      tool: "codex"
+    });
 
     await service.enqueueThreadMessage({
       userId: "owner-1",
       threadId: "thread-a",
       messageId: "m1",
-      prompt: "before-switch"
-    });
-
-    await service.changeTool({ userId: "owner-1", threadId: "thread-a", tool: "codex" });
-
-    await service.enqueueThreadMessage({
-      userId: "owner-1",
-      threadId: "thread-a",
-      messageId: "m2",
-      prompt: "after-switch"
+      prompt: "only-codex"
     });
 
     await service.waitForIdle();
 
-    expect(gemini.calls.map((call) => call.prompt)).toEqual(["before-switch"]);
-    expect(codex.calls.map((call) => call.prompt)).toEqual(["after-switch"]);
+    expect(gemini.calls).toHaveLength(0);
+    expect(codex.calls.map((call) => call.prompt)).toEqual(["only-codex"]);
   });
 
   it("supports retry for failed jobs", async () => {
     const { service } = await createHarness();
-    await service.startSession({ userId: "owner-1", projectName: "my-app", threadId: "thread-a" });
-    await service.changeTool({ userId: "owner-1", threadId: "thread-a", tool: "claude" });
+    await service.startSession({
+      userId: "owner-1",
+      projectName: "my-app",
+      threadId: "thread-a",
+      tool: "claude"
+    });
 
     await service.enqueueThreadMessage({
       userId: "owner-1",
@@ -199,7 +207,12 @@ describe("AgentService", () => {
 
   it("formats /status fields exactly", async () => {
     const { service } = await createHarness();
-    await service.startSession({ userId: "owner-1", projectName: "my-app", threadId: "thread-a" });
+    await service.startSession({
+      userId: "owner-1",
+      projectName: "my-app",
+      threadId: "thread-a",
+      tool: "gemini"
+    });
 
     const status = await service.status({ userId: "owner-1", threadId: "thread-a" });
 
@@ -212,9 +225,24 @@ describe("AgentService", () => {
 
   it("caps global parallel running jobs at 2 across threads", async () => {
     const { service, gemini } = await createHarness();
-    await service.startSession({ userId: "owner-1", projectName: "my-app", threadId: "thread-a" });
-    await service.startSession({ userId: "owner-1", projectName: "my-app", threadId: "thread-b" });
-    await service.startSession({ userId: "owner-1", projectName: "my-app", threadId: "thread-c" });
+    await service.startSession({
+      userId: "owner-1",
+      projectName: "my-app",
+      threadId: "thread-a",
+      tool: "gemini"
+    });
+    await service.startSession({
+      userId: "owner-1",
+      projectName: "my-app",
+      threadId: "thread-b",
+      tool: "gemini"
+    });
+    await service.startSession({
+      userId: "owner-1",
+      projectName: "my-app",
+      threadId: "thread-c",
+      tool: "gemini"
+    });
 
     await Promise.all([
       service.enqueueThreadMessage({
@@ -243,7 +271,12 @@ describe("AgentService", () => {
 
   it("opens existing session thread and rejects missing session", async () => {
     const { service } = await createHarness();
-    await service.startSession({ userId: "owner-1", projectName: "my-app", threadId: "thread-open" });
+    await service.startSession({
+      userId: "owner-1",
+      projectName: "my-app",
+      threadId: "thread-open",
+      tool: "gemini"
+    });
 
     const opened: string[] = [];
     const sessionId = await service.openSession({

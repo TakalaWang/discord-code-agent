@@ -35,14 +35,13 @@ Global slash commands are registered on startup. Discord propagation can take a 
 
 ## Command Surface
 
-- `/project create <name> <path> <tools_csv> <default_tool> [args_json]`
+- `/project create <name> <path> [args_json]`
 - `/project list`
 - `/project status <project_name>`
-- `/start <project_name>`
+- `/start <project_name> <tool>`
 - `/session list [project_name]`
 - `/session open <session_id>`
 - `/status` (inside managed thread)
-- `/tool <claude|codex|gemini>` (inside managed thread)
 - `/retry <job_id>`
 
 ## Persistence

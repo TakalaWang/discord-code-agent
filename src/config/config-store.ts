@@ -9,7 +9,6 @@ export interface ProjectConfig {
   name: string;
   path: string;
   enabled_tools: ToolName[];
-  default_tool: ToolName;
   default_args: Record<ToolName, string[]>;
   created_at: string;
   updated_at: string;
@@ -24,8 +23,6 @@ export interface ConfigFile {
 export interface CreateProjectInput {
   name: string;
   path: string;
-  toolsCsv: string;
-  defaultTool: string;
   argsJson?: string;
 }
 
@@ -41,18 +38,9 @@ function asTool(tool: string): ToolName | null {
   return null;
 }
 
-function parseToolsCsv(toolsCsv: string): ToolName[] {
-  const parsed = toolsCsv
-    .split(",")
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0)
-    .map(asTool)
-    .filter((value): value is ToolName => value !== null);
+const ALL_TOOLS: ToolName[] = ["gemini", "codex", "claude"];
 
-  return Array.from(new Set(parsed));
-}
-
-function parseArgsJson(raw: string | undefined, tools: ToolName[]): Record<ToolName, string[]> {
+function parseArgsJson(raw: string | undefined): Record<ToolName, string[]> {
   const defaults: Record<ToolName, string[]> = {
     gemini: [],
     codex: [],
@@ -74,7 +62,7 @@ function parseArgsJson(raw: string | undefined, tools: ToolName[]): Record<ToolN
     throw new DomainError("E_INVALID_TOOLSET", "args_json must be a JSON object");
   }
 
-  for (const tool of tools) {
+  for (const tool of ALL_TOOLS) {
     const value = parsed[tool];
     if (value === undefined) {
       continue;
@@ -125,17 +113,6 @@ function parseConfig(raw: string): ConfigFile {
       throw new Error(`invalid project schema: ${name}`);
     }
 
-    const enabled = Array.isArray(value.enabled_tools)
-      ? value.enabled_tools
-          .map((item) => (typeof item === "string" ? asTool(item) : null))
-          .filter((item): item is ToolName => item !== null)
-      : [];
-
-    const defaultTool = typeof value.default_tool === "string" ? asTool(value.default_tool) : null;
-    if (!defaultTool || !enabled.includes(defaultTool)) {
-      throw new Error(`invalid project default tool: ${name}`);
-    }
-
     const defaultArgsRaw = isObject(value.default_args) ? value.default_args : {};
     const defaultArgs: Record<ToolName, string[]> = {
       gemini: [],
@@ -153,8 +130,7 @@ function parseConfig(raw: string): ConfigFile {
     projects[name] = {
       name,
       path: typeof value.path === "string" ? value.path : "",
-      enabled_tools: enabled,
-      default_tool: defaultTool,
+      enabled_tools: [...ALL_TOOLS],
       default_args: defaultArgs,
       created_at:
         typeof value.created_at === "string" ? value.created_at : new Date(0).toISOString(),
@@ -227,21 +203,13 @@ export class ConfigStore {
       throw new DomainError("E_PROJECT_EXISTS", `project already exists: ${input.name}`);
     }
 
-    const enabledTools = parseToolsCsv(input.toolsCsv);
-    const defaultTool = asTool(input.defaultTool);
-
-    if (enabledTools.length === 0 || !defaultTool || !enabledTools.includes(defaultTool)) {
-      throw new DomainError("E_INVALID_TOOLSET", "invalid enabled tools or default tool");
-    }
-
-    const defaultArgs = parseArgsJson(input.argsJson, enabledTools);
+    const defaultArgs = parseArgsJson(input.argsJson);
     const now = new Date().toISOString();
 
     const project: ProjectConfig = {
       name: input.name,
       path: input.path,
-      enabled_tools: enabledTools,
-      default_tool: defaultTool,
+      enabled_tools: [...ALL_TOOLS],
       default_args: defaultArgs,
       created_at: now,
       updated_at: now

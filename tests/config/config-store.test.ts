@@ -39,36 +39,31 @@ describe("ConfigStore", () => {
       store.createProject({
         name: "my-app",
         path: dir,
-        toolsCsv: "gemini,codex",
-        defaultTool: "gemini",
         argsJson: "{\"gemini\":[\"--model\",\"gemini-2.5-pro\"]}"
       })
-    ).resolves.toMatchObject({ name: "my-app", default_tool: "gemini" });
+    ).resolves.toMatchObject({
+      name: "my-app",
+      enabled_tools: ["gemini", "codex", "claude"]
+    });
 
     await expect(
       store.createProject({
         name: "my-app",
-        path: dir,
-        toolsCsv: "gemini",
-        defaultTool: "gemini"
+        path: dir
       })
     ).rejects.toMatchObject({ code: "E_PROJECT_EXISTS" });
 
     await expect(
       store.createProject({
         name: "bad name",
-        path: dir,
-        toolsCsv: "gemini",
-        defaultTool: "gemini"
+        path: dir
       })
     ).rejects.toMatchObject({ code: "E_INVALID_TOOLSET" });
 
     await expect(
       store.createProject({
         name: "valid-name",
-        path: "relative/path",
-        toolsCsv: "gemini",
-        defaultTool: "gemini"
+        path: "relative/path"
       })
     ).rejects.toMatchObject({ code: "E_INVALID_PATH" });
   });

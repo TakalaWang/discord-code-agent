@@ -19,23 +19,6 @@ export function buildCommandDefinitions() {
         )
         .addStringOption((option) =>
           option
-            .setName("tools_csv")
-            .setDescription("Enabled tools, e.g. gemini,codex,claude")
-            .setRequired(true)
-        )
-        .addStringOption((option) =>
-          option
-            .setName("default_tool")
-            .setDescription("Default tool")
-            .setRequired(true)
-            .addChoices(
-              { name: "gemini", value: "gemini" },
-              { name: "codex", value: "codex" },
-              { name: "claude", value: "claude" }
-            )
-        )
-        .addStringOption((option) =>
-          option
             .setName("args_json")
             .setDescription("Optional JSON for default args per tool")
             .setRequired(false)
@@ -56,6 +39,17 @@ export function buildCommandDefinitions() {
     .setDescription("Create a new session thread")
     .addStringOption((option) =>
       option.setName("project_name").setDescription("Project name").setRequired(true)
+    )
+    .addStringOption((option) =>
+      option
+        .setName("tool")
+        .setDescription("Tool for this thread")
+        .setRequired(true)
+        .addChoices(
+          { name: "gemini", value: "gemini" },
+          { name: "codex", value: "codex" },
+          { name: "claude", value: "claude" }
+        )
     );
 
   const session = new SlashCommandBuilder()
@@ -83,21 +77,6 @@ export function buildCommandDefinitions() {
 
   const status = new SlashCommandBuilder().setName("status").setDescription("Show thread status");
 
-  const tool = new SlashCommandBuilder()
-    .setName("tool")
-    .setDescription("Switch tool for current thread")
-    .addStringOption((option) =>
-      option
-        .setName("name")
-        .setDescription("Tool name")
-        .setRequired(true)
-        .addChoices(
-          { name: "gemini", value: "gemini" },
-          { name: "codex", value: "codex" },
-          { name: "claude", value: "claude" }
-        )
-    );
-
   const retry = new SlashCommandBuilder()
     .setName("retry")
     .setDescription("Retry a failed or unknown job")
@@ -105,5 +84,5 @@ export function buildCommandDefinitions() {
       option.setName("job_id").setDescription("Job ID").setRequired(true)
     );
 
-  return [project, start, session, status, tool, retry].map((builder) => builder.toJSON());
+  return [project, start, session, status, retry].map((builder) => builder.toJSON());
 }

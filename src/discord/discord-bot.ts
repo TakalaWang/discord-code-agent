@@ -122,11 +122,6 @@ export class DiscordBot {
         return;
       }
 
-      if (interaction.commandName === "tool") {
-        await this.handleToolCommand(interaction);
-        return;
-      }
-
       if (interaction.commandName === "retry") {
         await this.handleRetryCommand(interaction);
       }
@@ -143,15 +138,11 @@ export class DiscordBot {
         userId: string;
         name: string;
         path: string;
-        toolsCsv: string;
-        defaultTool: string;
         argsJson?: string;
       } = {
         userId: interaction.user.id,
         name: interaction.options.getString("name", true),
-        path: interaction.options.getString("path", true),
-        toolsCsv: interaction.options.getString("tools_csv", true),
-        defaultTool: interaction.options.getString("default_tool", true)
+        path: interaction.options.getString("path", true)
       };
       const argsJson = interaction.options.getString("args_json");
       if (argsJson !== null) {
@@ -162,7 +153,7 @@ export class DiscordBot {
 
       await this.safeReply(
         interaction,
-        `Project created: ${project.name}\npath: ${project.path}\ndefault_tool: ${project.default_tool}`,
+        `Project created: ${project.name}\npath: ${project.path}\ntools: ${project.enabled_tools.join(",")}`,
         true
       );
       return;
@@ -177,8 +168,7 @@ export class DiscordBot {
 
       const body = projects
         .map(
-          (project) =>
-            `${project.name} | default=${project.default_tool} | tools=${project.enabled_tools.join(",")}`
+          (project) => `${project.name} | tools=${project.enabled_tools.join(",")}`
         )
         .join("\n");
 
@@ -202,6 +192,7 @@ export class DiscordBot {
     }
 
     const projectName = interaction.options.getString("project_name", true);
+    const tool = interaction.options.getString("tool", true) as "claude" | "codex" | "gemini";
     const thread = await channel.threads.create({
       name: `session-${projectName}-${Date.now().toString().slice(-6)}`,
       autoArchiveDuration: 1440,
@@ -211,12 +202,13 @@ export class DiscordBot {
     const started = await this.service.startSession({
       userId: interaction.user.id,
       projectName,
-      threadId: thread.id
+      threadId: thread.id,
+      tool
     });
 
     await this.safeReply(
       interaction,
-      `Session started: <#${thread.id}>\nsession_id: ${started.sessionId}`,
+      `Session started: <#${thread.id}>\nsession_id: ${started.sessionId}\ntool: ${tool}`,
       true
     );
 
@@ -289,22 +281,6 @@ export class DiscordBot {
     });
 
     await this.safeReply(interaction, status, true);
-  }
-
-  private async handleToolCommand(interaction: ChatInputCommandInteraction): Promise<void> {
-    const channel = interaction.channel;
-    if (!channel || !channel.isThread()) {
-      throw new DomainError("E_NOT_IN_MANAGED_THREAD", "/tool must run in a managed thread");
-    }
-
-    const tool = interaction.options.getString("name", true) as "claude" | "codex" | "gemini";
-    await this.service.changeTool({
-      userId: interaction.user.id,
-      threadId: channel.id,
-      tool
-    });
-
-    await this.safeReply(interaction, `Tool switched to ${tool}`, true);
   }
 
   private async handleRetryCommand(interaction: ChatInputCommandInteraction): Promise<void> {

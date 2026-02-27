@@ -43,22 +43,16 @@ export class AgentService {
     userId: string;
     name: string;
     path: string;
-    toolsCsv: string;
-    defaultTool: string;
     argsJson?: string;
   }): Promise<ProjectConfig> {
     this.assertOwner(options.userId);
     const input: {
       name: string;
       path: string;
-      toolsCsv: string;
-      defaultTool: string;
       argsJson?: string;
     } = {
       name: options.name,
-      path: options.path,
-      toolsCsv: options.toolsCsv,
-      defaultTool: options.defaultTool
+      path: options.path
     };
     if (options.argsJson !== undefined) {
       input.argsJson = options.argsJson;
@@ -69,8 +63,7 @@ export class AgentService {
     await this.runtimeStore.appendEvent("ProjectCreated", {
       project_name: project.name,
       path: project.path,
-      enabled_tools: project.enabled_tools,
-      default_tool: project.default_tool
+      enabled_tools: project.enabled_tools
     });
 
     return project;
@@ -127,6 +120,7 @@ export class AgentService {
     userId: string;
     projectName: string;
     threadId: string;
+    tool: ToolName;
   }): Promise<{ sessionId: string }> {
     this.assertOwner(options.userId);
 
@@ -135,10 +129,14 @@ export class AgentService {
       throw new DomainError("E_PROJECT_NOT_FOUND", `project not found: ${options.projectName}`);
     }
 
+    if (!project.enabled_tools.includes(options.tool)) {
+      throw new DomainError("E_TOOL_NOT_ENABLED", `tool not enabled: ${options.tool}`);
+    }
+
     await this.runtimeStore.appendEvent("SessionCreated", {
       thread_id: options.threadId,
       project_name: project.name,
-      tool: project.default_tool,
+      tool: options.tool,
       adapter_state: {}
     });
 
@@ -229,34 +227,6 @@ export class AgentService {
       `resume_ready: ${resumeReady}`,
       `retry_hint: ${retryHint}`
     ].join("\n");
-  }
-
-  public async changeTool(options: {
-    userId: string;
-    threadId: string;
-    tool: ToolName;
-  }): Promise<void> {
-    this.assertOwner(options.userId);
-
-    const state = this.runtimeStore.getState();
-    const session = state.sessions[options.threadId];
-    if (!session) {
-      throw new DomainError("E_NOT_IN_MANAGED_THREAD", "current thread is not managed");
-    }
-
-    const project = this.configStore.getProject(session.project_name);
-    if (!project) {
-      throw new DomainError("E_PROJECT_NOT_FOUND", `project not found: ${session.project_name}`);
-    }
-
-    if (!project.enabled_tools.includes(options.tool)) {
-      throw new DomainError("E_TOOL_NOT_ENABLED", `tool not enabled: ${options.tool}`);
-    }
-
-    await this.runtimeStore.appendEvent("ToolChanged", {
-      thread_id: options.threadId,
-      tool: options.tool
-    });
   }
 
   public async enqueueThreadMessage(options: {
